@@ -18,10 +18,10 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/facebookgo/pqueue"
-	"syscall"
 )
 
 // Stats for a RoundTrip.
@@ -100,6 +100,13 @@ type Transport struct {
 	// http.DefaultMaxIdleConnsPerHost is used.
 	MaxIdleConnsPerHost int
 
+	// A Dialer contains options for connecting to an address.
+	//
+	// The zero value for each field is equivalent to dialing
+	// without that option. Dialing with the zero value of Dialer
+	// is therefore equivalent to just calling the Dial function.
+	Dialer *net.Dialer
+
 	// Timeout is the maximum amount of time a dial will wait for
 	// a connect to complete.
 	//
@@ -109,6 +116,12 @@ type Transport struct {
 	// its own earlier timeout. For instance, TCP timeouts are
 	// often around 3 minutes.
 	DialTimeout time.Duration
+
+	// DialKeepAlive specifies the keep-alive period for an active
+	// network connection.
+	// If zero, keep-alives are not enabled. Network protocols
+	// that do not support keep-alives ignore this field.
+	DialKeepAlive time.Duration
 
 	// ResponseHeaderTimeout, if non-zero, specifies the amount of
 	// time to wait for a server's response headers after fully
@@ -165,9 +178,14 @@ func shouldRetryError(err error) bool {
 
 // Start the Transport.
 func (t *Transport) start() {
-	dialer := &net.Dialer{Timeout: t.DialTimeout}
+	if t.Dialer == nil {
+		t.Dialer = &net.Dialer{
+			Timeout:   t.DialTimeout,
+			KeepAlive: t.DialKeepAlive,
+		}
+	}
 	t.transport = &http.Transport{
-		Dial:                  dialer.Dial,
+		Dial:                  t.Dialer.Dial,
 		Proxy:                 t.Proxy,
 		TLSClientConfig:       t.TLSClientConfig,
 		DisableKeepAlives:     t.DisableKeepAlives,
@@ -314,7 +332,7 @@ func (b *bodyCloser) Close() error {
 	return err
 }
 
-// A Flag configured Transport instance.
+// TransportFlag - A Flag configured Transport instance.
 func TransportFlag(name string) *Transport {
 	t := &Transport{TLSClientConfig: &tls.Config{}}
 	flag.BoolVar(
@@ -346,6 +364,12 @@ func TransportFlag(name string) *Transport {
 		name+".dial-timeout",
 		2*time.Second,
 		name+" dial timeout",
+	)
+	flag.DurationVar(
+		&t.DialKeepAlive,
+		name+".dial-keepalive",
+		30*time.Second,
+		name+" dial keepalive connection",
 	)
 	flag.DurationVar(
 		&t.ResponseHeaderTimeout,
